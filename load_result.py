@@ -8,36 +8,6 @@ import pandas as pd
 $ python load_result.py
 """
 
-@DeprecationWarning
-def calc_total_accuracy(file_path, n, start_n, end_n):
-    """
-    結果ファイルをUNIONする。[start_n, end_n]の範囲で結果ファイルを見る。
-    param
-        file_path: 結果ファイルのパス(n=の部分を{}にすること。)
-        n: 何件ごとにファイルを分けているか
-        start_n: 開始のn
-        end_n: 終了のn
-    usage
-        # n={}として、後で代入する。
-        file_path = "results/temp/model=EleutherAI_gpt-neox-20b-input=None-method=vanilla-shots=15-n={}_int8bit.csv" # vanilla
-        # file_path = "results/temp/model=EleutherAI_gpt-neox-20b-input=None-method=BM25-shots=15-n={}_int8bit.csv" # BM25
-        calc_total_accuracy(file_path=file_path, n=100, start_n=100, end_n=1000)
-    """
-    print("calc_accuracy:")
-    result_list = list()
-    for i in range(start_n, end_n + 1, n):
-        path = file_path.format(i)
-        result = pd.read_csv(path)
-        print("path: {}, accuracy: {}".format(path, result.is_correct.mean()))
-        result_list.append(result)
-    # 全ての結果ファイルをUNIONする。
-    all_results = pd.concat(result_list)
-    print("path: {}, accuracy: {}".format(file_path, all_results.is_correct.mean()))
-
-    all_results_path = file_path.format("union{}-{}".format(start_n, end_n))
-    print("write file : " + all_results_path)
-    all_results.to_csv(all_results_path)
-
 
 def calc_total_accuracy(file_path, n1, n2):
     """
@@ -104,13 +74,6 @@ def combine_nonp_para_result(nonparametric_path, parametric_path, n, output_path
 
 
 def main():
-
-    # nを範囲指定して結果をUNION
-    if False:
-        # n={}として、後で代入する。
-        file_path = "results/temp/model=EleutherAI_gpt-neox-20b-input=None-method=vanilla-shots=15-n={}_int8bit.csv" # vanilla
-        # file_path = "results/temp/model=EleutherAI_gpt-neox-20b-input=None-method=BM25-shots=15-n={}_int8bit.csv" # BM25
-        calc_total_accuracy(file_path=file_path, n=100, start_n=100, end_n=1000)
     
     # nを2つ指定して結果をUNION
     if False:
