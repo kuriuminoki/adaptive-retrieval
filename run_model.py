@@ -1,6 +1,8 @@
 #!/usr/bin/python
 # -*- coding: UTF-8 -*-
 
+import datetime
+
 import random
 import torch
 import os
@@ -37,6 +39,7 @@ def load_jsonlines(file):
         lst = [obj for obj in jsonl_f]
     return lst
 
+# テンプレート 16種類
 q_templates = {
     22: "What is {}'s occupation?",
     218: "In what city was {} born?",
@@ -85,9 +88,16 @@ def call_request(prompt, model, tokenizer, max_new_tokens=15):
 
 def call_model(prompt, model, tokenizer, device, max_new_tokens=15, model_max_length=None):
     max_inpt_tokens = tokenizer.model_max_length if model_max_length is None else model_max_length
+    # print(f"encode {datetime.datetime.now()}")
     inpts = tokenizer(prompt, return_tensors="pt").to(device)
+
+    # print(f"generate {datetime.datetime.now()}")
+    # num_beams=1, do_sample=False -> greedy searchを意味する
     gen = model.generate(input_ids=inpts.input_ids[:, -(max_inpt_tokens - max_new_tokens):], attention_mask=inpts.attention_mask[:, -(max_inpt_tokens - max_new_tokens):], pad_token_id=tokenizer.eos_token_id, max_new_tokens=max_new_tokens, num_beams=1, do_sample=False)
+
+    # print(f"decode1 {datetime.datetime.now()}")
     text = tokenizer.decode(gen[0])
+    # print(f"decode2 {datetime.datetime.now()}")
     actual_prompt = tokenizer.decode(inpts.input_ids[0, -(max_inpt_tokens - max_new_tokens):])
     pred = text[len(actual_prompt):]
     if pred.startswith("\n\n"):
@@ -106,14 +116,16 @@ def get_few_shot_text_with_retrieval(row, retrieval_dict, eval_method):
         return completion_template.format(row.question) + " " + row.obj
       # retrieval_dict[row.id]["ctxs"][0]
     if row.question.replace("?", "").lower() not in retrieval_dict:
-        print("missing retrieval")
+        print("missing retrieval" + row.question.replace("?", "").lower()) # なぜかサンプルには検索結果を付けない（lowerにすることでおそらく必ずここにくる）
         return completion_template.format(row.question) + " " + row.obj
     else:
         retrieval = retrieval_dict[row.question.replace("?", "").lower()]["ctxs"][0]
         retrieved_text = clip_paragraph(retrieval["text"], eval_method)
+        # 検索結果を連結
         return retrieved_text + "\n\n" + completion_template.format(row.question) + " " + row.obj
 
 def get_few_shot_text(row, eval_method):
+    # vanillaの時に使う、単に質問 + objの連結
     return completion_template.format(row.question) + " " + row.obj
 
 def get_genread_passage(question, genread_template, generate_function, max_new_tokens=150):
@@ -154,9 +166,14 @@ def main():
     parser.add_argument('--continue_from', type=str, help="path to previous results file")
     parser.add_argument('--int8bit', action="store_true")
     parser.add_argument('--parallel', type=str, help="string of format 'i.n_workers' where i is the index of the worker")
+    parser.add_argument('--skip_n', type=int, default=0)# 最初のn個は実行済みなのでスキップ
 
     args = parser.parse_args()
-        
+
+    skip_n = args.skip_n
+    print(f"skip_n={skip_n}")
+    
+    # トークナイザー、LLM、generate(プロンプトを受け取り出力を返す無名関数)を定義
     use_gpt3 = args.model_name in {"text-davinci-003", "text-davinci-002", "text-curie-001", "text-babbage-001", "text-ada-001"}
     if use_gpt3:
         with open("../../openAIkey.txt") as f:
@@ -171,45 +188,67 @@ def main():
         tokenizer.pad_token_id = tokenizer.eos_token_id
         if args.int8bit:
             model =  convert_model_to_int8_on_gpu(AutoModelForCausalLM.from_pretrained(gpt), device)
+            model = torch.compile(model)
         else:
             model = AutoModelForCausalLM.from_pretrained(gpt).eval().to(device)
+            model = torch.compile(model)
         if "opt" in args.model_name or args.model_name == "EleutherAI/gpt-neox-20b":
             generate = lambda prompt, max_new_tokens: call_model(prompt, model=model, tokenizer=tokenizer, device=device, max_new_tokens=max_new_tokens, model_max_length=2048)
         else:
             generate = lambda prompt, max_new_tokens: call_model(prompt, model=model, tokenizer=tokenizer, device=device, max_new_tokens=max_new_tokens)
+    
+    print("tokenizer.model_max_length={}".format(tokenizer.model_max_length))
+    print(model.generation_config)
+    
+    # データセット読み込み read_csvの返り値はDataFrame
     input_path = args.input_file
     knowledge = pd.read_csv(input_path, sep="\t")
 
+    # 前の出力の続きとして次の出力を行うなら、その設定をする.
     if args.continue_from is not None:
         results = pd.read_csv(args.continue_from, sep="\t")
+        # 前の出力がないデータのみ残す
         knowledge = knowledge[~knowledge.id.isin(results.id)]
+    
+    # ランダムに--sample or all 行サンプリングする。
     n = len(knowledge) if args.sample == 0 else args.sample
-    sample = knowledge.sample(n=n, replace=False)
+    sample = knowledge.sample(n=n, replace=False, random_state=0)
+    
+    # おそらく並列処理の設定
     if args.parallel is not None:
         worker_num, n_workers = map(int, args.parallel.split("."))
         sample = sample.iloc[worker_num::n_workers]
 
+    # テンプレートごとのサンプル数 デフォルト: n_examples=15, examples_per_template=1
     n_examples = args.n_examples
     is_templatedQA = True
     examples_per_template = n_examples // (len(q_templates) - 1)
 
-    preds = []
-    prompts =[]
-    accuracy = []
-    responses = []
+    # 検索補強のメソッドを必要に応じてセットアップ
+    preds = [] # 予測した答え
+    prompts =[] # LLMに渡したプロンプト
+    accuracy = [] # 正解: True, 不正解: False のリスト
+    responses = [] # レスポンス全体？
     if args.eval_method in ["BM25", "contriever"]:
         has_answer = []
         retrieval_ids = []
         with open(args.ret_path) as f:
+            # ${question}をkeyに検索結果を保持 
             retrieval_dict = {json.loads(s)["question"]: json.loads(s) for s in f.readlines()}
+            print(len(retrieval_dict))
         # print(retrieval_dict)
     if args.eval_method == "genread":
         genread_few_shot_examples = get_few_shot_examples_genread(knowledge, generate, n_examples, genread_template, is_templatedQA, max_new_tokens=150)
         has_answer = []
         gen_passages = []
 
-    # main loop
+    # main loop データ数n個、row: データ1行 (pandas.core.series.Series)
+    i = 0
     for row in tqdm(sample.iloc, total=n):
+
+        if i < skip_n:
+            i = i + 1
+            continue
 
         # get few shot examples text
         if n_examples == 0:
@@ -227,62 +266,73 @@ def main():
                     few_shot_examples = random.sample([ex for ex in genread_few_shot_examples if row.question not in ex], n_examples)
             else:
                 if is_templatedQA:
+                    # テンプレートのIDからrowのprop_idに該当するものを除去
                     other_pids = list(q_templates.keys())
                     other_pids.remove(row.prop_id)
+                    # 今見ているquestionとは違うテンプレートのquestionをexamples_per_template個ずつ抽出する
                     for pid in other_pids:
                         for row2 in knowledge[knowledge.prop_id == pid].sample(n=examples_per_template).iloc:
+                            # "Q: ${row2.question} A: ${row2.obj}" をappend
+                            # BM25 or contrieverなら 検索結果も最初につけて、"${検索テキスト} \n\n Q: ${row2.question} A: ${row2.obj}"
                             few_shot_examples.append(get_few_shot_text_with_retrieval(row2, retrieval_dict, args.eval_method) if args.eval_method in ["BM25", "contriever"] else get_few_shot_text(row2, args.eval_method))
                 else:
+                    # テンプレートを意識せずサンプルを選ぶ場合
                     for row2 in knowledge[knowledge.question != row.question].sample(n=n_examples).iloc:
                         few_shot_examples.append(get_few_shot_text_with_retrieval(row2, retrieval_dict, args.eval_method) if args.eval_method in ["BM25", "contriever"] else get_few_shot_text(row2, args.eval_method))
                 
                     
             np.random.shuffle(few_shot_examples)
+            # 空行を挟んで複数のクエスチョン(shot、つまりサンプル)を連結する
             few_shot_examples_text = "\n\n".join(few_shot_examples) + "\n\n"
 
         # get prompt
         if args.eval_method == "vanilla":
+            # 本命のクエスチョンを連結
             prompt = few_shot_examples_text + completion_template.format(row.question)
         elif args.eval_method in ["BM25", "contriever"]:
             query = row.question
             try: 
                 retrieval = retrieval_dict[query]["ctxs"][0]  # retrieval_dict[row.id]["ctxs"][0]
             except:
-
                 print("No retrieval for", query, " Example query:", list(retrieval_dict.keys())[0])
                 retrieval = {"text": "", "id": np.nan, "hasanswer": False}
             retrieved_text = clip_paragraph(retrieval["text"], eval_method=args.eval_method)
             retrieval_id = retrieval["id"]
+            # 検索文＋本命のクエスチョンを連結
             prompt = few_shot_examples_text + retrieved_text + "\n\n" + completion_template.format(row.question)
             has_answer.append(retrieval["hasanswer"])
             retrieval_ids.append(retrieval_id)
         elif args.eval_method == "genread":
+            # テンプレートに沿ってクエスチョンを連結
             generation = get_genread_passage(row.question, genread_template, generate, max_new_tokens=150)
             prompt = few_shot_examples_text + generation + "\n\n" + completion_template.format(row.question)
             gen_passages.append(generation)
         
-        # generate response
+        # generate response (pred: 予測した答え, response: レスポンス全体？)
         pred, response = generate(prompt, max_new_tokens=args.max_new_tokens)
         prompts.append(prompt)
         preds.append(pred)
         responses.append(response)
 
         # compute accuracy
-        possible_answers = json.loads(row.possible_answers)        
+        possible_answers = json.loads(row.possible_answers) # possible_answerはゴールドアンサー（表記ゆれに対応するため複数答えの候補があり、配列になっている）
         is_correct = False
         genread_has_answer = False
         for pa in possible_answers:
             if pa in pred or pa.lower() in pred or pa.capitalize() in pred:
+                # 正解とみなす
                 is_correct = True
             if args.eval_method == "genread" and pa in response or pa.lower() in response or pa.capitalize() in response:
+                # 
                 genread_has_answer = True
         accuracy.append(is_correct)
         if args.eval_method == "genread":
             has_answer.append(genread_has_answer)
 
-        # save results intermittently
+        # save results intermittently tmpフォルダに途中結果を保存
         if len(preds) % 100 == 0:
-            temp_sample = sample.iloc[:len(preds)].copy()
+            # プログラム開始からの結果をすべて保存
+            temp_sample = sample.iloc[skip_n:skip_n+len(preds)].copy()
             temp_sample["pred"] = preds
             temp_sample["prompt"] = prompts
             temp_sample["generation"] = responses
@@ -297,7 +347,7 @@ def main():
             if not os.path.exists(f"results/temp/"):
                 os.makedirs(f"results/temp/")
             worker_str = "" if args.parallel is None else f"-worker={args.parallel}"
-            output_path = f"results/temp/model={model_name_alias}-input={args.alias}-method={args.eval_method}-shots={n_examples}-n={len(temp_sample)}{'_int8bit' if args.int8bit is True else ''}{worker_str}.csv"
+            output_path = f"results/temp/model={model_name_alias}-input={args.alias}-method={args.eval_method}-shots={n_examples}-n={skip_n+len(temp_sample)}{'_int8bit' if args.int8bit is True else ''}{worker_str}.csv"
             temp_sample.to_csv(output_path, index=False)
 
     sample["is_correct"] = accuracy
@@ -311,7 +361,9 @@ def main():
         sample["has_answer"] = has_answer
         sample["gen_passage"] = gen_passages
 
-    print(sample.is_correct.mean())
+    # 正解率はここで初めて計算
+    accuracy_score = sample.is_correct.mean()
+    print(accuracy_score)
     model_name_alias = args.model_name.replace("/","_")
     worker_str = "" if args.parallel is None else f"-worker={args.parallel}"
     sample.to_csv(f"results/model={model_name_alias}-input={args.alias}-method={args.eval_method}-shots={n_examples}-n={len(sample)}{'_int8bit' if args.int8bit is True else ''}{worker_str}.csv")

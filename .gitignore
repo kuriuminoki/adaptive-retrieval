@@ -1,0 +1,6 @@
+memo/
+venv/
+*\__pycache__
+data/retrieval/
+data/データセットについてのメモ.txt
+results/
