@@ -39,6 +39,7 @@ def calc_total_accuracy(file_path, n1, n2):
 
     all_results_path = file_path.format("union{}and{}".format(n1, n2))
     print("write file : " + all_results_path)
+    all_results = all_results.reset_index(drop=True)
     all_results.to_csv(all_results_path)
 
 
@@ -70,6 +71,7 @@ def combine_nonp_para_result(nonparametric_path, parametric_path, n, output_path
     
     output_path = output_path.format(n)
     print("write file : " + output_path)
+    nonpa_result = nonpa_result.reset_index(drop=True)
     nonpa_result.to_csv(output_path)
 
 
@@ -79,13 +81,17 @@ def main():
     if False:
         file_path = "results/temp/model=EleutherAI_gpt-neox-20b-input=None-method=vanilla-shots=15-n={}_int8bit.csv" # vanilla
         calc_total_accuracy(file_path=file_path, n1=1400, n2=2000)
+        file_path = "results/temp/model=EleutherAI_gpt-neox-20b-input=None-method=BM25-shots=15-n={}_int8bit.csv" # BM25
+        calc_total_accuracy(file_path=file_path, n1=1000, n2=2000)
 
     # 考察用、検索あり・なしのJOIN
     if True:
-        nonp_result_path = "results/temp/model=EleutherAI_gpt-neox-20b-input=None-method=vanilla-shots=15-n={}_int8bit.csv" # vanilla
-        para_result_path = "results/temp/model=EleutherAI_gpt-neox-20b-input=None-method=BM25-shots=15-n={}_int8bit.csv" # BM25
+        # nonp_result_path = "results/temp/model=EleutherAI_gpt-neox-20b-input=None-method=vanilla-shots=15-n={}_int8bit.csv" # vanilla
+        # para_result_path = "results/temp/model=EleutherAI_gpt-neox-20b-input=None-method=BM25-shots=15-n={}_int8bit.csv" # BM25
+        nonp_result_path = "results/temp/model=EleutherAI_gpt-neox-20b-input=None-method=vanilla-shots=15-n=union1400and{}_int8bit.csv" # vanilla
+        para_result_path = "results/temp/model=EleutherAI_gpt-neox-20b-input=None-method=BM25-shots=15-n=union1000and{}_int8bit.csv" # BM25
         output_path = "results/discussion/model=EleutherAI_gpt-neox-20b-input=None-method=vanillaVSBM25-shots=15-n={}_int8bit.csv"
-        combine_nonp_para_result(nonp_result_path, para_result_path, 1000, output_path)
+        combine_nonp_para_result(nonp_result_path, para_result_path, 2000, output_path)
 
 
 if __name__ == "__main__":
