@@ -75,6 +75,21 @@ def combine_nonp_para_result(nonparametric_path, parametric_path, n, output_path
     nonpa_result.to_csv(output_path)
 
 
+def extract_only_correct(input_path, vanilla_correct, ret_correct ,output_path):
+    """
+    vanilla, retの結果でフィルタリングする。
+    vanilla_correct = Trueならvanillaで正解したデータを抽出
+    ret_correct = Trueならretで正解したデータを抽出
+    input_path: 入力ファイル
+    output_path: 抽出結果（フィルタリング結果）の書き込み先
+    """
+    result = pd.read_csv(input_path)
+    extracted_result = result.copy()
+    extracted_result = extracted_result[extracted_result.is_correct == vanilla_correct]
+    extracted_result = extracted_result[extracted_result.ret_is_correct == ret_correct]
+    extracted_result.to_csv(output_path)
+
+
 def main():
     
     # nを2つ指定して結果をUNION
@@ -85,13 +100,22 @@ def main():
         calc_total_accuracy(file_path=file_path, n1=1000, n2=2000)
 
     # 考察用、検索あり・なしのJOIN
-    if True:
+    if False:
         # nonp_result_path = "results/temp/model=EleutherAI_gpt-neox-20b-input=None-method=vanilla-shots=15-n={}_int8bit.csv" # vanilla
         # para_result_path = "results/temp/model=EleutherAI_gpt-neox-20b-input=None-method=BM25-shots=15-n={}_int8bit.csv" # BM25
         nonp_result_path = "results/temp/model=EleutherAI_gpt-neox-20b-input=None-method=vanilla-shots=15-n=union1400and{}_int8bit.csv" # vanilla
         para_result_path = "results/temp/model=EleutherAI_gpt-neox-20b-input=None-method=BM25-shots=15-n=union1000and{}_int8bit.csv" # BM25
         output_path = "results/discussion/model=EleutherAI_gpt-neox-20b-input=None-method=vanillaVSBM25-shots=15-n={}_int8bit.csv"
         combine_nonp_para_result(nonp_result_path, para_result_path, 2000, output_path)
+    
+    if True:
+        n = 2000
+        input_path = f"results/discussion/model=EleutherAI_gpt-neox-20b-input=None-method=vanillaVSBM25-shots=15-n={n}_int8bit.csv"
+        vanilla_correct = False
+        ret_correct = True
+        output_path = f"results/discussion/model=EleutherAI_gpt-neox-20b-input=None-method=vanillaVSBM25-shots=15-n={n}_vanilla={vanilla_correct}-ret={ret_correct}int8bit.csv"
+        print("output_file: {}".format(output_path))
+        extract_only_correct(input_path, vanilla_correct, ret_correct, output_path)
 
 
 if __name__ == "__main__":
