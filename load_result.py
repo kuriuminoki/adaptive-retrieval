@@ -140,18 +140,19 @@ def main():
         combine_nonp_para_result(nonp_result_path, para_result_path, 2000, output_path)
     
     # 正解状況でフィルタリング
-    if True:
+    if False:
         n = 2000
         input_path = f"results/discussion/model=EleutherAI_gpt-neox-20b-input=None-method=vanillaVSBM25-shots=15-n={n}_int8bit.csv"
         output_path = f"results/discussion/model=EleutherAI_gpt-neox-20b-input=None-method=vanillaVSBM25-shots=15-n={n}_filter_int8bit.csv"
         print("output_file: {}".format(output_path))
         extract_only_correct(input_path, output_path)
     
+    # s_popの対数を計算し、そのカラムを追加する。
     if True:
         n = 2000
-        input_path = f"results/discussion/model=EleutherAI_gpt-neox-20b-input=None-method=vanillaVSBM25-shots=15-n={n}_filter_int8bit.csv"
+        input_path = f"results/discussion/model=EleutherAI_gpt-neox-20b-input=None-method=vanillaVSBM25-shots=15-n=2000_int8bit.csv"
         summary_path = f"results/discussion/model=EleutherAI_gpt-neox-20b-input=None-shots=15-n=union1400and2000_int8bit-ar_summary.csv"
-        output_path = f"results/discussion/model=EleutherAI_gpt-neox-20b-input=None-method=vanillaVSBM25-shots=15-n={n}_filter_spop_int8bit.csv"
+        output_path = f"results/discussion/model=EleutherAI_gpt-neox-20b-input=None-method=vanillaVSBM25-shots=15-n=2000_spop_int8bit.csv"
         add_log_pop_column(input_path, summary_path, output_path)
 
 
